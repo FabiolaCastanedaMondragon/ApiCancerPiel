@@ -5,7 +5,7 @@ from django.urls import path, include
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    # Conecta la aplicación detector bajo /api/
-    path('api/', include('detector.urls')), 
+
+    # ← CORREGIDO
+    path('api/', include('cancerpiel.api_cancer.detector.urls')),
 ]
-# (Guardar y cerrar)

@@ -8,9 +8,9 @@ https://docs.djangoproject.com/en/5.2/howto/deployment/wsgi/
 """
 
 import os
-
 from django.core.wsgi import get_wsgi_application
 
+# ← CORREGIDO
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'cancerpiel.api_cancer.api_cancer.settings')
 
 application = get_wsgi_application()

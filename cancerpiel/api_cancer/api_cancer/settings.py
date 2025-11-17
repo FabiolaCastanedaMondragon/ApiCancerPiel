@@ -31,8 +31,8 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'rest_framework',  # AÑADIDO
-    'detector',        # AÑADIDO
+    'rest_framework',               # AÑADIDO
+    'cancerpiel.api_cancer.detector',  # ← CORREGIDO
 ]
 
 MIDDLEWARE = [
@@ -62,6 +62,7 @@ TEMPLATES = [
         },
     },
 ]
+
 WSGI_APPLICATION = 'cancerpiel.api_cancer.api_cancer.wsgi.application'
 
 
