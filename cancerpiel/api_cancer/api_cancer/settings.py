@@ -45,7 +45,7 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-ROOT_URLCONF = 'api_cancer.urls'
+ROOT_URLCONF = 'cancerpiel.api_cancer.api_cancer.urls'
 
 TEMPLATES = [
     {
@@ -62,8 +62,7 @@ TEMPLATES = [
         },
     },
 ]
-
-WSGI_APPLICATION = 'api_cancer.wsgi.application'
+WSGI_APPLICATION = 'cancerpiel.api_cancer.api_cancer.wsgi.application'
 
 
 # Database
