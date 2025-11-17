@@ -1,3 +1,4 @@
+# detector/views.py
 import os
 import zipfile
 import gdown
@@ -21,192 +22,272 @@ FINAL_ACCURACY = 0.8800
 FINAL_F1_SCORE = 0.7300
 IMAGE_SIZE = 128
 
-# Directorio de modelos
-MODEL_DIR = os.path.join(settings.BASE_DIR, 'detector', 'models')
+# Directorio de modelos (Render borra todo en cada build, así que se recrea)
+MODEL_DIR = os.path.join(settings.BASE_DIR, "detector", "models")
 os.makedirs(MODEL_DIR, exist_ok=True)
 
-ZIP_PATH = os.path.join(MODEL_DIR, 'models.zip')
-URL_ZIP  = "https://drive.google.com/uc?export=download&id=1xTaOe3UUKLBvBvFv8IyxWzhD5GwwuqCi"
+ZIP_PATH = os.path.join(MODEL_DIR, "models.zip")
+URL_ZIP = "https://drive.google.com/uc?export=download&id=1xTaOe3UUKLBvBvFv8IyxWzhD5GwwuqCi"
 
-# Función para validar archivos H5
+# Validación del archivo H5
 def is_h5_valid(path):
     try:
-        with h5py.File(path, 'r') as f:
+        with h5py.File(path, "r"):
             return True
     except Exception as e:
-        print(f"Archivo corrupto: {e}")
+        # imprimir para debugging en deploy logs
+        print(f"[is_h5_valid] archivo no válido o inexistente {path}: {e}")
         return False
 
-# Descargar ZIP si no existe
+# Descargar ZIP solo si no existe
 if not os.path.exists(ZIP_PATH):
-    print("📥 Descargando archivos de modelos (ZIP) desde Drive...")
-    gdown.download(URL_ZIP, ZIP_PATH, quiet=False)
+    try:
+        print("[models] descargando ZIP desde Drive...")
+        gdown.download(URL_ZIP, ZIP_PATH, quiet=True)
+        print("[models] descarga finalizada (o ya existía).")
+    except Exception as e:
+        print(f"❌ ERROR: No se pudo descargar el ZIP: {e}")
 
-# Descomprimir ZIP si no están los .h5
-ALEXNET_PATH = os.path.join(MODEL_DIR, 'best_alexnet_model.h5')
-RESNET_PATH  = os.path.join(MODEL_DIR, 'best_resnet50_model.h5')
+# Rutas de modelos
+ALEXNET_PATH = os.path.join(MODEL_DIR, "best_alexnet_model.h5")
+RESNET_PATH = os.path.join(MODEL_DIR, "best_resnet50_model.h5")
 
+# Extraer ZIP si faltan modelos
 if (not os.path.exists(ALEXNET_PATH)) or (not os.path.exists(RESNET_PATH)):
     try:
-        with zipfile.ZipFile(ZIP_PATH, 'r') as zip_ref:
-            zip_ref.extractall(MODEL_DIR)
-            print("✔ Descompresión completa.")
+        if os.path.exists(ZIP_PATH):
+            with zipfile.ZipFile(ZIP_PATH, "r") as z:
+                z.extractall(MODEL_DIR)
+            print("[models] ZIP extraído correctamente.")
+        else:
+            print("[models] ZIP no encontrado; saltando extracción.")
     except Exception as e:
-        print(f"❌ Error al descomprimir ZIP: {e}")
+        print(f"❌ ERROR EXTRAYENDO ZIP: {e}")
 
-# Cargar los modelos
+# Cargar modelos
 try:
     if is_h5_valid(ALEXNET_PATH) and is_h5_valid(RESNET_PATH):
-        ALEXNET_MODEL = load_model(ALEXNET_PATH)
-        RESNET_MODEL  = load_model(RESNET_PATH)
-        print("✅ Modelos AlexNet y ResNet50 cargados correctamente.")
-        print("AlexNet capas:", [layer.name for layer in ALEXNET_MODEL.layers])
-        print("ResNet50 capas:", [layer.name for layer in RESNET_MODEL.layers])
+        # compile=False para evitar intentar recompilar con optimizadores no disponibles en deploy
+        ALEXNET_MODEL = load_model(ALEXNET_PATH, compile=False)
+        RESNET_MODEL = load_model(RESNET_PATH, compile=False)
+        print("[models] Modelos cargados correctamente.")
     else:
-        print("⚠️ Uno o ambos archivos .h5 están corruptos o no existen.")
+        print("[models] Uno o ambos .h5 no existen o están corruptos.")
         ALEXNET_MODEL = None
         RESNET_MODEL = None
 except Exception as e:
-    print(f"❌ Error al cargar modelos: {e}")
+    print("❌ ERROR CARGANDO MODELOS:", e)
     ALEXNET_MODEL = None
     RESNET_MODEL = None
 
+
 # -----------------------------------------------------
-# FUNCIONES AUXILIARES: mapas de activación
+# FUNCIONES AUXILIARES PARA ACTIVACIONES
 # -----------------------------------------------------
+
 def activation_to_base64_mri(feature_map, out_size=256):
+    """
+    Convierte una matriz 2D (activación) a PNG base64 en escala de grises.
+    Robustecida contra NaNs, rangos cero, y tamaños inesperados.
+    """
     try:
         arr = np.array(feature_map, dtype=np.float32)
+
+        # Si la activación está vacía o con shape inesperado, crear matriz neutra
         if arr.size == 0:
             arr = np.zeros((IMAGE_SIZE, IMAGE_SIZE), dtype=np.float32)
-        minv, maxv = np.nanmin(arr), np.nanmax(arr)
+
+        # Normalizar con protección numérica
+        minv = np.nanmin(arr)
+        maxv = np.nanmax(arr)
         eps = 1e-8
-        norm = (arr - minv) / (maxv - minv + eps)
-        img_uint8 = (norm * 255.0).astype(np.uint8)
-        pil = Image.fromarray(img_uint8, mode='L')
-        pil = ImageOps.autocontrast(pil)
+        denom = (maxv - minv) if (maxv - minv) > 0 else eps
+        norm = (arr - minv) / denom
+
+        img_uint8 = np.clip((norm * 255.0), 0, 255).astype(np.uint8)
+        pil = Image.fromarray(img_uint8, mode="L")
+
+        # Ajustes visuales para estilo "MRI"
+        pil = ImageOps.autocontrast(pil, cutoff=0)
         pil = ImageEnhance.Contrast(pil).enhance(2.0)
         pil = pil.resize((out_size, out_size), Image.LANCZOS)
+
         buff = io.BytesIO()
-        pil.save(buff, format='PNG', optimize=True)
+        pil.save(buff, format="PNG", optimize=True)
         buff.seek(0)
-        return base64.b64encode(buff.read()).decode('utf-8')
-    except Exception:
-        black = Image.new('L', (out_size, out_size), color=0)
-        buf = io.BytesIO()
-        black.save(buf, format='PNG')
-        buf.seek(0)
-        return base64.b64encode(buf.read()).decode('utf-8')
+        return base64.b64encode(buff.read()).decode("utf-8")
+    except Exception as e:
+        print(f"[activation_to_base64_mri] error: {e}")
+        # fallback: imagen negra
+        blank = Image.new("L", (out_size, out_size), color=0)
+        tmp = io.BytesIO()
+        blank.save(tmp, format="PNG")
+        tmp.seek(0)
+        return base64.b64encode(tmp.read()).decode("utf-8")
+
 
 def _select_conv_layers(model):
-    conv_layers = []
+    """
+    Selecciona capas convolucionales intentando ser tolerante a diferentes nombres/arquitecturas.
+    """
+    convs = []
     for layer in model.layers:
         try:
-            if isinstance(layer, Conv2D) or ('conv' in layer.name.lower()):
-                conv_layers.append(layer)
+            if isinstance(layer, Conv2D) or ("conv" in layer.name.lower()):
+                convs.append(layer)
         except Exception:
-            try:
-                if 'conv' in layer.name.lower():
-                    conv_layers.append(layer)
-            except Exception:
-                continue
-    return conv_layers
+            # ignorar capas que no expongan nombre u otras propiedades
+            continue
+    return convs
+
 
 def get_feature_maps(model, img_array, max_layers=8):
+    """
+    Devuelve lista de dicts con 'nombre' y 'imagen' (base64) para las primeras `max_layers`
+    capas convolucionales del modelo. Si no hay capas o falla, devuelve [].
+    """
     if model is None:
         return []
+
     conv_layers = _select_conv_layers(model)
-    selected = conv_layers[:max_layers]
-    try:
-        outputs = [layer.output for layer in selected]
-        intermediate_model = models.Model(inputs=model.input, outputs=outputs)
-        activations = intermediate_model.predict(img_array)
-    except Exception:
+    if not conv_layers:
+        # No hay capas convolucionales detectadas
+        print("[get_feature_maps] no se detectaron capas conv en el modelo.")
         return []
-    visualizaciones = []
-    for idx, act in enumerate(activations):
+
+    conv_layers = conv_layers[:max_layers]
+
+    try:
+        interm = models.Model(inputs=model.input, outputs=[l.output for l in conv_layers])
+        activs = interm.predict(img_array)
+    except Exception as e:
+        print(f"[get_feature_maps] error creando modelo intermedio o predict: {e}")
+        return []
+
+    results = []
+    for i, act in enumerate(activs):
         try:
-            if act.ndim == 4:
-                act_2d = np.mean(act[0], axis=-1)
-            elif act.ndim == 3:
-                act_2d = act[0]
-            elif act.ndim == 2:
-                act_2d = act
+            # Convertir activación a 2D para visualizar (media sobre canales)
+            if hasattr(act, "ndim"):
+                if act.ndim == 4:
+                    act2d = np.mean(act[0], axis=-1)
+                elif act.ndim == 3:
+                    act2d = act[0]
+                elif act.ndim == 2:
+                    act2d = act
+                else:
+                    act2d = np.zeros((IMAGE_SIZE, IMAGE_SIZE))
             else:
-                act_2d = np.zeros((IMAGE_SIZE, IMAGE_SIZE))
-            img_b64 = activation_to_base64_mri(act_2d)
-            layer_name = selected[idx].name if idx < len(selected) else f"layer_{idx}"
-            visualizaciones.append({"nombre": f"{idx+1}: {layer_name}", "imagen": img_b64})
-        except Exception:
-            visualizaciones.append({"nombre": f"{idx+1}: {(selected[idx].name if idx < len(selected) else 'unknown')}",
-                                     "imagen": activation_to_base64_mri(np.zeros((IMAGE_SIZE, IMAGE_SIZE)))})
-    return visualizaciones
+                act2d = np.zeros((IMAGE_SIZE, IMAGE_SIZE))
+
+            img64 = activation_to_base64_mri(act2d)
+            layer_name = conv_layers[i].name if i < len(conv_layers) else f"layer_{i}"
+            results.append({"nombre": f"{i+1}: {layer_name}", "imagen": img64})
+        except Exception as e:
+            print(f"[get_feature_maps] error procesando activacion {i}: {e}")
+            results.append({
+                "nombre": f"{i+1}: {(conv_layers[i].name if i < len(conv_layers) else 'unknown')}",
+                "imagen": activation_to_base64_mri(np.zeros((IMAGE_SIZE, IMAGE_SIZE)))
+            })
+
+    return results
+
 
 # -----------------------------------------------------
-# ENDPOINT 1: métricas JSON
+# ENDPOINT: MÉTRICAS (JSON)
 # -----------------------------------------------------
+
 class MetricsView(APIView):
     def get(self, request):
         if ALEXNET_MODEL is None or RESNET_MODEL is None:
-            return Response({"error": "Modelos no disponibles o corruptos."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
-        metrics = {
+            return Response({"error": "Modelos no disponibles."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        return Response({
             "model_type": "Ensamble (AlexNet + ResNet50)",
             "accuracy_final": FINAL_ACCURACY,
             "f1_score_final": FINAL_F1_SCORE,
-            "description": "Diagnóstico Binario: 0 (Benigno) / 1 (Maligno).",
-        }
-        return Response(metrics)
+            "description": "Diagnóstico Binario: 0 (Benigno) / 1 (Maligno)"
+        })
+
 
 # -----------------------------------------------------
-# ENDPOINT 2: predicción HTML
+# ENDPOINT: PREDICCIÓN + ACTIVACIONES (HTML)
 # -----------------------------------------------------
+
 class PredictView(View):
+
     def get(self, request):
-        return render(request, 'predict.html', {})
+        return render(request, "predict.html")
 
     def post(self, request):
+
         if ALEXNET_MODEL is None or RESNET_MODEL is None:
-            return render(request, 'predict.html', {'error_message': "Modelos no cargados o corruptos, verifique los archivos."})
-        if 'image_file' not in request.FILES:
-            return render(request, 'predict.html', {'error_message': "Seleccione un archivo de imagen."})
+            return render(request, "predict.html", {
+                "error_message": "Modelos no cargados o corruptos."
+            })
 
-        img_file = request.FILES['image_file']
+        if "image_file" not in request.FILES:
+            return render(request, "predict.html", {
+                "error_message": "Seleccione una imagen."
+            })
+
+        # --- Imagen subida ---
+        file = request.FILES["image_file"]
+
         try:
-            img = Image.open(img_file).convert('RGB')
+            img = Image.open(file).convert("RGB")
             img = img.resize((IMAGE_SIZE, IMAGE_SIZE))
-            img_array = np.expand_dims(np.array(img).astype('float32') / 255.0, axis=0)
+            arr = np.expand_dims(np.array(img).astype("float32") / 255.0, axis=0)
         except Exception as e:
-            return render(request, 'predict.html', {'error_message': f"Error en preprocesamiento: {e}"})
+            print(f"[PredictView] error procesando imagen: {e}")
+            return render(request, "predict.html", {
+                "error_message": f"Error procesando imagen: {e}"
+            })
 
-        # Imagen subida en base64
-        buffered = io.BytesIO()
-        img.save(buffered, format='PNG')
-        uploaded_image_url = f"data:image/png;base64,{base64.b64encode(buffered.getvalue()).decode('utf-8')}"
+        # Convertir imagen a b64 (para mantener preview en template)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        uploaded_image_url = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("utf-8")
 
-        # Predicciones
-        pred_alexnet = ALEXNET_MODEL.predict(img_array)[0][0]
-        pred_resnet  = RESNET_MODEL.predict(img_array)[0][0]
-        combined_pred = (pred_alexnet + pred_resnet) / 2.0
-        is_malignant = combined_pred < 0.25
+        # ---- PREDICCIONES ----
+        try:
+            p_alex = ALEXNET_MODEL.predict(arr)[0][0]
+        except Exception as e:
+            print(f"[PredictView] error predict AlexNet: {e}")
+            p_alex = float("nan")
+        try:
+            p_resn = RESNET_MODEL.predict(arr)[0][0]
+        except Exception as e:
+            print(f"[PredictView] error predict ResNet: {e}")
+            p_resn = float("nan")
+
+        # Si alguna predicción no es número válido, manejar como 0.5 (neutral) para no romper la UI
+        if not np.isfinite(p_alex):
+            p_alex = 0.5
+        if not np.isfinite(p_resn):
+            p_resn = 0.5
+
+        combined = (p_alex + p_resn) / 2.0
+        maligno = combined < 0.25
 
         result = {
-            "prediccion_final_probabilidad": float(combined_pred),
-            "diagnostico_codigo": 1 if is_malignant else 0,
-            "diagnostico_texto": "MALIGNO (Posible Cáncer)" if is_malignant else "BENIGNO (No Cancer)",
+            "prediccion_final_probabilidad": float(combined),
+            "diagnostico_codigo": 1 if maligno else 0,
+            "diagnostico_texto": "MALIGNO (Posible Cáncer)" if maligno else "BENIGNO (No Cáncer)",
             "detalles_modelo": {
-                "Probabilidad_AlexNet": float(pred_alexnet),
-                "Probabilidad_ResNet50": float(pred_resnet)
+                "Probabilidad_AlexNet": float(p_alex),
+                "Probabilidad_ResNet50": float(p_resn)
             }
         }
 
-        # Mapas de activación
-        alexnet_maps = get_feature_maps(ALEXNET_MODEL, img_array)
-        resnet_maps  = get_feature_maps(RESNET_MODEL, img_array)
+        # --- MAPAS DE ACTIVACIÓN ---
+        alex_maps = get_feature_maps(ALEXNET_MODEL, arr)
+        res_maps = get_feature_maps(RESNET_MODEL, arr)
 
-        context = {
-            'result': result,
-            'alexnet_maps': alexnet_maps,
-            'resnet_maps': resnet_maps,
-            'uploaded_image_url': uploaded_image_url
-        }
-        return render(request, 'predict.html', context)
+        return render(request, "predict.html", {
+            "result": result,
+            "alexnet_maps": alex_maps,
+            "resnet_maps": res_maps,
+            "uploaded_image_url": uploaded_image_url
+        })
