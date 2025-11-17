@@ -1,0 +1,14 @@
+# Exclusiones estándar y peligrosas
+venv/
+__pycache__/
+*.pyc
+db.sqlite3
+.DS_Store
+
+# Archivos de modelos y datos (¡Causa de tu problema!)
+*.h5
+*.keras
+*.pb
+*.pkl
+assets_ia/
+detector/*.h5

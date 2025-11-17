@@ -1,0 +1,13 @@
+# Entornos virtuales
+venv/
+__pycache__/
+*.pyc
+
+# Modelos grandes
+detector/models/*.h5
+detector/models/*.zip
+
+# Archivos de sistema
+.DS_Store
+*.log
+*.sqlite3

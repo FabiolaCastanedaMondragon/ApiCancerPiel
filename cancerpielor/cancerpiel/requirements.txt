@@ -1,0 +1,8 @@
+Django>=4.2
+djangorestframework
+tensorflow
+Pillow
+numpy
+gdown
+gunicorn
+# Dependencias de la API 16/11/2025
